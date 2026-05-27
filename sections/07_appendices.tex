@@ -1,1 +1,121 @@
 \uniterablesection{ДОДАТКИ}
+
+\vspace{1em}
+\noindent\textbf{Додаток А. Обробник події про виявлену активність}
+
+\vspace{0.5em}
+Наведений нижче фрагмент відповідає за створення записів звичок на основі активності, виявленої у зовнішніх сервісах. Він добирає звички користувача за джерелом автоматизації, відсіює вже зафіксовані події за зовнішнім ідентифікатором і створює нові записи (лістинг~\ref{lst:handler}).
+
+\begin{lstlisting}[style=nocodeframe, caption={Створення записів за виявленою активністю}, label={lst:handler}]
+public async ValueTask Handle(
+    IntegrationActivitiesDetectedIntegrationEvent notification,
+    CancellationToken cancellationToken)
+{
+    var habits = await habitService.GetByAutomationSourceAsync(
+        notification.UserId, notification.Source, cancellationToken);
+
+    if (habits.Count == 0)
+    {
+        return;
+    }
+
+    var incomingExternalIds = notification.Activities
+        .Select(a => a.ExternalId).ToHashSet();
+
+    var existingExternalIds = await dbContext.HabitEntries.AsNoTracking()
+        .Where(e => e.UserId == notification.UserId
+            && e.ExternalId != null
+            && incomingExternalIds.Contains(e.ExternalId))
+        .Select(e => e.ExternalId!)
+        .ToHashSetAsync(cancellationToken);
+
+    var newActivities = notification.Activities
+        .Where(a => !existingExternalIds.Contains(a.ExternalId))
+        .ToList();
+
+    foreach (var habit in habits)
+    {
+        foreach (var activity in newActivities)
+        {
+            var result = HabitEntryAggregate.Create(
+                Id<HabitEntryAggregate>.NewId(),
+                notification.UserId, habit.HabitId,
+                value: activity.Value, notes: activity.Notes,
+                HabitEntrySource.Automation,
+                externalId: activity.ExternalId, activity.OccurredAtUtc);
+
+            if (result.IsFailure)
+            {
+                continue;
+            }
+
+            dbContext.HabitEntries.Add(result.Value.ToEntity());
+        }
+    }
+
+    await dbContext.SaveChangesAsync(cancellationToken);
+}
+\end{lstlisting}
+
+\vspace{1em}
+\noindent\textbf{Додаток Б. Відбір подій активності GitHub}
+
+\vspace{0.5em}
+Цей фрагмент сервісу опитування GitHub демонструє відбір релевантних подій (комітів і запитів на злиття) та публікацію інтеграційної події для подальшої обробки (лістинг~\ref{lst:github}).
+
+\begin{lstlisting}[style=nocodeframe, caption={Відбір подій GitHub та публікація інтеграційної події}, label={lst:github}]
+var filteredEvents = eventsResult.Value
+    .Where(e =>
+        (e.Type == GitHubEventTypes.Push
+            || e.Type == GitHubEventTypes.PullRequest)
+        && e.CreatedAtUtc > todayDay
+        && (e.CreatedAtUtc > lastSyncedAtUtc
+            || lastSyncedAtUtc is null))
+    .ToList();
+
+var activities = filteredEvents
+    .Select(e => new IntegrationActivityItem(e.Id, e.CreatedAtUtc, BuildNotes(e)))
+    .ToList();
+
+if (activities.Count == 0)
+{
+    return Result.Success();
+}
+
+await publisher.Publish(
+    new IntegrationActivitiesDetectedIntegrationEvent(
+        identityUserId, IntegrationActivitySource.Github, activities),
+    cancellationToken);
+
+return Result.Success();
+\end{lstlisting}
+
+\vspace{1em}
+\noindent\textbf{Додаток В. Інструкція користувача}
+
+\vspace{0.5em}
+\textit{Передумови.} Для запуску системи потрібні: пакет .NET 10 SDK, середовище Node.js, Docker (для контейнера бази даних, який автоматично піднімає .NET Aspire) та сучасний вебоглядач.
+
+\textit{Запуск серверної частини.} У каталозі оркестратора виконати команду запуску — .NET Aspire самостійно підніме контейнер PostgreSQL та вебсервер API:
+
+\begin{lstlisting}[style=nocodeframe]
+cd Dailo.AppHost
+dotnet run
+\end{lstlisting}
+
+\textit{Запуск клієнтської частини.} У каталозі клієнтського застосунку встановити залежності та запустити сервер розробки; інтерфейс стане доступним за адресою \texttt{http://localhost:4200}:
+
+\begin{lstlisting}[style=nocodeframe]
+cd Dailo.ClientApp
+npm install
+npm start
+\end{lstlisting}
+
+\textit{Порядок роботи.}
+\begin{enumerate}[noitemsep, topsep=2pt, leftmargin=*, label=\arabic*)]
+    \item Зареєструвати обліковий запис або увійти за наявними даними.
+    \item У розділі «Звички» створити звички, вказавши тип, періодичність, ціль і, за потреби, джерело автоматизації.
+    \item За потреби додати записи вручну в розділі «Записи».
+    \item У профілі, на вкладці «Integrations», під'єднати GitHub (увівши персональний токен) та/або Strava (через авторизацію OAuth).
+    \item Стежити за прогресом на головній панелі: теплова карта та стрічка активності оновлюються автоматично, зокрема за рахунок автоматично зібраних подій із під'єднаних сервісів.
+\end{enumerate}

@@ -1,35 +1,174 @@
 \customSection[sec:architecture]{Проєктування та архітектура системи}{0em}
 
-Lorem Ipsum is simply dummy text of the printing and typesetting industry.
-Lorem Ipsum has been the industry’s standard dummy text ever since the 1500s, when
-an unknown printer took a galley of type and scrambled it to make a type specimen
-book. It has survived not only five centuries, but also the leap into electronic typesetting,
-remaining essentially unchanged. It was popularised in the 1960s with the release of
-Letraset sheets containing Lorem Ipsum passages, and more recently with desktop
-publishing software like Aldus PageMaker including versions of Lorem Ipsum.
+Сформульовані в попередньому розділі вимоги визначають не лише функціональність, а й те, якою має бути внутрішня будова системи. Вимоги розширюваності, підтримуваності та можливості додавати нові інтеграції без переписування коду прямо вказують на потребу в продуманій архітектурі з чітким поділом відповідальності. У цьому розділі описано обраний архітектурний підхід, модульну структуру, доменну модель, схему бази даних, програмний інтерфейс і технологічний стек.
 
-\customSubSection[sec:architecture_two_level_section_1]{Секція другого рівня}{1em}
+\customSubSection[sec:arch_choice]{Вибір архітектурного підходу}{0em}
 
-Lorem Ipsum is simply dummy text of the printing and typesetting industry.
-Lorem Ipsum has been the industry’s standard dummy text ever since the 1500s, when
-an unknown printer took a galley of type and scrambled it to make a type specimen
-book. It has survived not only five centuries, but also the leap into electronic typesetting,
-remaining essentially unchanged. It was popularised in the 1960s with the release of
-Letraset sheets containing Lorem Ipsum passages, and more recently with desktop
-publishing software like Aldus PageMaker including versions of Lorem Ipsum.
+Під час проєктування розглядалося три типові підходи до організації серверної частини: монолітна архітектура, модульний моноліт і мікросервіси.
 
-\begin{spacing}{1.3}
-\noindent
-\begin{xltabular}{\textwidth}{| c | >{\raggedright\arraybackslash}X | c |}
-    \caption{Ще одна тестова таблиця} \label{tab:test_table2} \\
-    \hline
-    \textbf{№} & \textbf{Тест} & \textbf{Тест} \\ \hline
-    \endfirsthead
+Класичний \textbf{моноліт} найпростіший у розробці й розгортанні, проте з часом схильний до розмивання меж між частинами коду, що ускладнює подальший розвиток. \textbf{Мікросервіси}, навпаки, забезпечують незалежне масштабування й розгортання окремих частин, але ціною високої операційної складності: потрібні оркестрація, розподілене трасування, обробка мережевих збоїв і розподілених транзакцій. Для навчального проєкту з однією командою розробників така складність є невиправданою.
 
-    \multicolumn{3}{r}{\textit{}} \\ \hline
-    \textbf{№} & \textbf{Тест} & \textbf{Тест} \\ \hline
-    \endhead
+Компромісним рішенням став \textbf{модульний моноліт}. Він зберігає простоту розгортання єдиного застосунку, але водночас вимагає чіткого поділу на модулі з вираженими межами. Кожен модуль відповідає за окрему частину предметної області й взаємодіє з іншими лише через визначені інтерфейси, а не через спільний доступ до даних. Такий підхід дає більшість переваг мікросервісної декомпозиції на рівні структури коду, не накладаючи її експлуатаційних витрат, і залишає можливість у майбутньому виокремити будь-який модуль в окремий сервіс з мінімальними змінами. Саме тому для системи обрано модульний моноліт.
 
-    1 & Методи та засоби інженерії програмного забезпечення & 220 \\ \hline
-\end{xltabular}
+\customSubSection[sec:arch_modules]{Модульна структура та обмежені контексти}{1em}
+
+Систему поділено на обмежені контексти (bounded contexts) відповідно до підходу предметно-орієнтованого проєктування. Кожен контекст відповідає за самодостатню частину предметної області:
+
+\begin{itemize}[noitemsep, topsep=2pt, leftmargin=*]
+    \item \textbf{Habit} — керування звичками користувача;
+    \item \textbf{HabitEntry} — записи про виконання звичок (ручні та автоматичні);
+    \item \textbf{HabitUser} — профіль користувача та конфігурації інтеграцій із зовнішніми сервісами;
+    \item \textbf{Identity} — реєстрація, автентифікація та керування токенами доступу;
+    \item \textbf{Tag} — теги для категоризації звичок.
+\end{itemize}
+
+Спільні для всіх модулів абстракції винесено в окремий проєкт \texttt{SharedKernel} — це базові класи сутностей та агрегатів, інтерфейси CQRS, конвенції роботи з базою даних та шаблон результату (Result). Композиція всіх модулів в єдиний застосунок відбувається у проєкті \texttt{Dailo.Api}, а локальний запуск разом із базою даних оркеструється засобами .NET Aspire. Кожен модуль має однотипну внутрішню організацію, що спрощує орієнтування в коді (лістинг~\ref{lst:structure}).
+
+\begin{lstlisting}[style=nocodeframe, caption={Типова структура модуля}, label={lst:structure}]
+Habit.Domain/          // домен: агрегати, VO, enums
+Habit.Application/     // сценарії: команди, запити, обробники
+Habit.Infrastructure/  // дані: DbContext, конфігурації EF, міграції
+Habit.Api/             // інтерфейс: групи ендпоінтів
+\end{lstlisting}
+
+Загальну структуру системи — клієнтський застосунок, композицію модулів, спільне ядро, базу даних і зовнішні сервіси — та зв'язки між ними подано на \textbf{рис.~\ref{fig:modules}}. Зверніть увагу, що модуль \texttt{HabitUser} взаємодіє з \texttt{HabitEntry} не напряму, а через інтеграційні події.
+
+\setfigure[fig:modules]{0.9\textwidth}{assets/diagram-modules}{Структура модулів та зовнішні залежності системи}
+
+\customSubSection[sec:arch_layers]{Шарувата організація та доменна модель}{1em}
+
+Усередині кожного модуля застосовано принципи чистої архітектури. Шари розташовані концентрично, а залежності спрямовані лише всередину — до доменного шару, який не залежить від жодного зовнішнього коду. Інфраструктурний шар (база даних, зовнішні HTTP-клієнти) залежить від домену, а не навпаки. Це робить доменну логіку незалежною від технічних деталей і полегшує тестування.
+
+Ключовою особливістю доменного шару є розмежування \textbf{агрегату} та \textbf{сутності}. Агрегат (наприклад, \texttt{HabitAggregate}) — це насичений доменний об'єкт, усі поля якого приховані, а зовнішній світ взаємодіє з ним лише через методи поведінки. Натомість сутність (\texttt{HabitEntity}) — це проста модель для збереження в базі даних. Агрегат перетворюється на сутність методом \texttt{ToEntity()} перед збереженням і відновлюється з неї після читання. Завдяки цьому правила предметної області зосереджені в одному місці й не можуть бути порушені в обхід.
+
+Незмінні величини предметної області подано як \textbf{об'єкти-значення} (value objects) з валідацією у фабричному методі. Спроба створити некоректне значення завершується не винятком, а поверненням результату з помилкою, що робить обробку передбачуваною (лістинг~\ref{lst:vo}).
+
+\begin{lstlisting}[style=nocodeframe, caption={Об'єкт-значення Frequency із валідацією}, label={lst:vo}]
+public static Result<Frequency> Create(FrequencyType type, int timesPerPeriod)
+{
+    if (timesPerPeriod <= 0)
+    {
+        return Result<Frequency>.BadRequest(
+            "TimesPerPeriod must be greater than zero.");
+    }
+
+    return Result<Frequency>.Success(new Frequency(type, timesPerPeriod));
+}
+\end{lstlisting}
+
+Структуру доменної моделі модуля звичок — агрегати, об'єкти-значення та переліки з їх взаємозв'язками — наведено на \textbf{рис.~\ref{fig:class}}. Агрегат \texttt{HabitAggregate} композиційно містить об'єкти-значення \texttt{Frequency} і \texttt{Target}, а також необов'язковий \texttt{Milestone}, і посилається на теги й записи.
+
+\setfigure[fig:class]{0.95\textwidth}{assets/diagram-class}{Діаграма класів доменної моделі}
+
+\customSubSection[sec:arch_cqrs]{Розділення команд і запитів}{1em}
+
+Сценарії застосування побудовано за принципом CQRS — розділення операцій, що змінюють стан (команди), та операцій, що лише читають дані (запити). Команди й запити описуються інтерфейсами \texttt{ICommand} та \texttt{IQuery}, а їх обробники — \texttt{ICommandHandler} і \texttt{IQueryHandler}. Диспетчеризацію між викликом і обробником виконує бібліотека Mediator, код якої генерується на етапі компіляції, що уникає накладних витрат на рефлексію під час виконання.
+
+Поділ дає практичну вигоду. Команди проходять через агрегат: завантажується доменний об'єкт, викликається його метод поведінки, результат зберігається — так гарантується дотримання інваріантів. Запити ж не потребують агрегату й проєктують дані безпосередньо з сутності EF Core у потрібний об'єкт передачі даних (DTO), що робить читання простим і швидким. Наскрізні аспекти — валідація запитів, журналювання, керування транзакціями — реалізовано як конвеєр (pipeline) обробки, що оточує кожну команду.
+
+\customSubSection[sec:arch_events]{Подієва взаємодія між модулями}{1em}
+
+Щоб модулі залишалися слабко зв'язаними, взаємодія між ними відбувається через інтеграційні події, а не прямі виклики. Цей механізм є основою автоматичного трекінгу. Коли модуль \texttt{HabitUser} під час опитування зовнішнього сервісу виявляє нову активність, він не звертається напряму до модуля записів, а лише публікує подію \texttt{IntegrationActivitiesDetected}, що містить ідентифікатор користувача, джерело (GitHub або Strava) та перелік виявлених активностей.
+
+Модуль \texttt{HabitEntry} підписаний на цю подію. Його обробник знаходить звички користувача, прив'язані до відповідного джерела автоматизації, відсіює вже зафіксовані активності за зовнішнім ідентифікатором (щоб уникнути дублів) і створює нові записи. Завдяки такому розв'язанню модуль опитування нічого не знає про логіку формування записів, а модуль записів — про деталі роботи із зовнішніми сервісами. Кожен з них можна змінювати чи розширювати незалежно.
+
+Повну послідовність взаємодії компонентів під час автоматичного збору активності (на прикладі GitHub) показано на \textbf{рис.~\ref{fig:sequence}} — від спрацювання фонового процесу до збереження нових записів у базі даних.
+
+\setfigure[fig:sequence]{0.95\textwidth}{assets/diagram-sequence}{Діаграма послідовності автоматичного збору активності}
+
+\customSubSection[sec:arch_db]{Проєктування бази даних}{1em}
+
+Як сховище обрано реляційну СУБД PostgreSQL, а доступ до даних реалізовано через Entity Framework Core. Кожен модуль володіє власним набором таблиць і власним контекстом бази даних, що підкреслює логічну ізоляцію контекстів навіть у межах єдиного екземпляра СУБД. Імена стовпців приводяться до стилю snake\_case за допомогою відповідної конвенції, а первинні ключі використовують типізовані ідентифікатори, що унеможливлює випадкову плутанину ідентифікаторів різних сутностей. Основні таблиці системи та їх призначення наведено в \tabref{tab:db}.
+
+\needspace{6.5cm}
+\begin{spacing}{1.2}
+    \footnotesize
+    \noindent
+    \begin{xltabular}{\textwidth}{| >{\raggedright\arraybackslash}X | >{\raggedright\arraybackslash}X |}
+        \caption{Основні таблиці бази даних} \label{tab:db} \\
+        \hline
+        \textbf{Таблиця} & \textbf{Призначення} \\ \hline
+        \endfirsthead
+
+        \hline
+        \textbf{Таблиця} & \textbf{Призначення} \\ \hline
+        \endhead
+
+        habits & звички користувача з типом, періодичністю, ціллю та джерелом автоматизації \\ \hline
+        habit\_entries & записи про виконання звичок (ручні та автоматичні) із зовнішнім ідентифікатором \\ \hline
+        tags & теги користувача \\ \hline
+        habit\_tags & зв'язок «багато-до-багатьох» між звичками й тегами \\ \hline
+        integration\_configs & конфігурації під'єднаних сервісів (токени, час останньої синхронізації) \\ \hline
+        users & профілі користувачів \\ \hline
+        refresh\_tokens & токени оновлення сесії \\ \hline
+    \end{xltabular}
 \end{spacing}
+
+Логічну схему основних таблиць та зв'язків між ними подано на \textbf{рис.~\ref{fig:er}}. Оскільки кожен модуль володіє власним контекстом, міжмодульні зв'язки (наприклад, за \texttt{user\_id}) є логічними, а не зовнішніми ключами на рівні СУБД.
+
+\setfigure[fig:er]{0.85\textwidth}{assets/diagram-er}{Схема бази даних (основні сутності та зв'язки)}
+
+\customSubSection[sec:arch_api]{Проєктування програмного інтерфейсу}{1em}
+
+Взаємодія клієнтської частини із сервером відбувається через інтерфейс у стилі REST поверх протоколу HTTP, обмін даними — у форматі JSON. Ендпоінти згруповано за модулями: операції зі звичками, записами, тегами, профілем користувача, інтеграціями та автентифікацією. Опис інтерфейсу формується автоматично у форматі OpenAPI, а для його перегляду та інтерактивного тестування використано вебінтерфейс Scalar (\textbf{рис.~\ref{fig:api}}).
+
+\setfigure[fig:api]{0.92\textwidth}{assets/api-docs}{Автоматично згенерована документація REST API у вебінтерфейсі Scalar}
+
+На \textbf{рис.~\ref{fig:api}} видно, що для кожного ендпоінта документація подає метод HTTP, структуру тіла запиту, можливі коди відповідей і приклади викликів. Перелік основних ендпоінтів роботи зі звичками та записами наведено в \tabref{tab:api}.
+
+\needspace{6.5cm}
+\begin{spacing}{1.2}
+    \footnotesize
+    \noindent
+    \begin{xltabular}{\textwidth}{| c | >{\raggedright\arraybackslash}X | >{\raggedright\arraybackslash}X |}
+        \caption{Основні ендпоінти REST API} \label{tab:api} \\
+        \hline
+        \textbf{Метод} & \textbf{Шлях} & \textbf{Призначення} \\ \hline
+        \endfirsthead
+
+        \hline
+        \textbf{Метод} & \textbf{Шлях} & \textbf{Призначення} \\ \hline
+        \endhead
+
+        POST & /api/habits & створення нової звички \\ \hline
+        GET & /api/habits & отримання списку звичок \\ \hline
+        PUT & /api/habits/\{id\} & оновлення звички \\ \hline
+        POST & /api/habit-entries & створення запису \\ \hline
+        GET & /api/habit-entries & отримання списку записів \\ \hline
+        POST & /api/auth/register & реєстрація користувача \\ \hline
+        POST & /api/auth/login & вхід у систему \\ \hline
+    \end{xltabular}
+\end{spacing}
+
+\customSubSection[sec:arch_stack]{Обґрунтування технологічного стеку}{1em}
+
+Серверну частину реалізовано на платформі \textbf{.NET 10} мовою C\# — зрілій, продуктивній і кросплатформній екосистемі з потужною підтримкою асинхронності, що важливо для фонового опитування зовнішніх сервісів. Для доступу до даних використано \textbf{Entity Framework Core} з провайдером Npgsql, для валідації — FluentValidation, для автентифікації — JWT-токени разом з ASP.NET Core Identity. Локальну оркестрацію застосунку й бази даних забезпечує \textbf{.NET Aspire}, а спостережуваність — OpenTelemetry.
+
+Клієнтську частину побудовано як односторінковий застосунок (SPA) на \textbf{Angular 21}. Керування станом реалізовано через бібліотеку NGXS, інтерфейс — на компонентах PrimeNG зі стилізацією засобами Tailwind CSS. Такий вибір забезпечує сувору типізацію, модульність та зрілу екосистему готових компонентів. Стислий перелік обраних технологій подано в \tabref{tab:stack}.
+
+\needspace{6.5cm}
+\begin{spacing}{1.2}
+    \footnotesize
+    \noindent
+    \begin{xltabular}{\textwidth}{| >{\raggedright\arraybackslash}X | >{\raggedright\arraybackslash}X |}
+        \caption{Технологічний стек системи} \label{tab:stack} \\
+        \hline
+        \textbf{Складова} & \textbf{Технологія} \\ \hline
+        \endfirsthead
+
+        \hline
+        \textbf{Складова} & \textbf{Технологія} \\ \hline
+        \endhead
+
+        Платформа сервера & .NET 10, C\# \\ \hline
+        Вебфреймворк & ASP.NET Core \\ \hline
+        Доступ до даних & Entity Framework Core, Npgsql \\ \hline
+        База даних & PostgreSQL \\ \hline
+        Оркестрація & .NET Aspire \\ \hline
+        Клієнтський застосунок & Angular 21 \\ \hline
+        Керування станом & NGXS \\ \hline
+        Компоненти інтерфейсу & PrimeNG, Tailwind CSS \\ \hline
+    \end{xltabular}
+\end{spacing}
+
+Описана архітектура повністю покриває сформульовані вимоги й слугує основою для реалізації, розгляду якої присвячено наступний розділ.

@@ -13,16 +13,22 @@
 \renewcommand{\headrulewidth}{0pt}
 
 \lstdefinestyle{nocodeframe}{
-    basicstyle=\ttfamily\small,
+    basicstyle=\ttfamily\footnotesize,
     keywordstyle=\color{blue},
     commentstyle=\color{green!60!black},
     stringstyle=\color{red},
     numbers=left,
-    numberstyle=\small\color{gray},
+    numberstyle=\footnotesize\color{gray},
     stepnumber=1,
     numbersep=7pt,
     showstringspaces=false,
     breaklines=true,
+    breakatwhitespace=false,
+    breakindent=0pt,
+    postbreak=\mbox{\textcolor{gray}{$\hookrightarrow$}\space},
+    columns=fullflexible,
+    keepspaces=true,
+    xleftmargin=1.5em,
     frame=none,
     tabsize=2,
 }
